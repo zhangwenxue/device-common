@@ -6,12 +6,11 @@ import androidx.bluetooth.BluetoothDevice
 object BleDeviceFactory {
     fun createBleDevice(
         bluetoothDevice: BluetoothDevice,
-        mac: String,
-        vararg scanFilters: String
+        mac: String
     ): Device<BluetoothDevice>? {
         return when {
-            scanFilters.first() == "WWKECG12E" -> BleEcg3G(bluetoothDevice, mac)
-            else -> null
+            bluetoothDevice.name == "WWKECG12E" -> BleEcg3G(bluetoothDevice, mac)
+            else -> BleEcg3G(bluetoothDevice, mac)
         }
     }
 }
