@@ -17,27 +17,19 @@ interface Channel {
 interface Connection<T> {
     val name: String
     val realDevice: T
-    val channel1: Channel?
-    val channel2: Channel?
-        get() = null
-    val channel3: Channel?
-        get() = null
-    val channel4: Channel?
-        get() = null
-    val channel5: Channel?
-        get() = null
-    val channel6: Channel?
-        get() = null
-    val channel7: Channel?
-        get() = null
-    val channel8: Channel?
-        get() = null
-    val channel9: Channel?
-        get() = null
+    fun channel1(): Channel?
+    fun channel2(): Channel? = null
+    fun channel3(): Channel? = null
+    fun channel4(): Channel? = null
+    fun channel5(): Channel? = null
+    fun channel6(): Channel? = null
+    fun channel7(): Channel? = null
+    fun channel8(): Channel? = null
+    fun channel9(): Channel? = null
 
     fun config(configuration: T.() -> Unit)
 
-    fun connect(connect: T.() -> Unit)
+    suspend fun connect(): Result<Unit>
 
-    fun disconnect(configuration: T.() -> Unit)
+    fun disconnect()
 }

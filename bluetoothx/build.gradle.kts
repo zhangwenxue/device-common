@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "android.boot.device.ecg"
+    namespace = "android.boot.bluetoothx"
     compileSdk = 34
 
     defaultConfig {
@@ -37,12 +37,6 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
-//    coordinates("io.github.zhangwenxue", "ble-common", "1.0.0-alpha2")
-    implementation(libs.ble.common)
-    implementation(project(":device-api"))
-    implementation(project(":bluetoothx"))
-    implementation(libs.android.common)
-//    implementation(libs.androidx.bluetooth)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

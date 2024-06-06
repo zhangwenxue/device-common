@@ -9,5 +9,6 @@ interface Device<T> {
     val connection: Connection<T>
     suspend fun read(dest: ByteArray? = null, timeoutMillis: Int): Result<ByteArray>
     suspend fun write(dest: ByteArray, timeoutMillis: Int): Result<Unit>
-    fun listen(): Flow<Result<ByteArray>>
+    suspend fun listen(): Flow<Result<ByteArray>>
+    fun close()
 }

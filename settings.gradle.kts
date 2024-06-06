@@ -30,3 +30,4 @@ rootProject.name = "device-common"
 include(":app")
 include(":device-api")
 include(":device-ecg")
+include(":bluetoothx")
