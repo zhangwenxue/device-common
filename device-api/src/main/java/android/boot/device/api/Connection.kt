@@ -2,8 +2,13 @@ package android.boot.device.api
 
 import kotlinx.coroutines.flow.Flow
 
-data object ChannelNotFoundException : Throwable("Channel not found!")
-data object ConnectionNotFoundException : Throwable("Connection not found!")
+data object ChannelNotFoundException : Throwable("Channel not found!") {
+    private fun readResolve(): Any = ChannelNotFoundException
+}
+
+data object ConnectionNotFoundException : Throwable("Connection not found!") {
+    private fun readResolve(): Any = ConnectionNotFoundException
+}
 
 interface Channel {
     val id: String
@@ -11,12 +16,12 @@ interface Channel {
 
     suspend fun read(src: ByteArray? = null, timeoutMillis: Int): Result<ByteArray>
     suspend fun write(dest: ByteArray, timeoutMillis: Int): Result<Unit>
-    fun listen(): Flow<Result<ByteArray>>
+    suspend fun listen(): Flow<Result<ByteArray>>
 }
 
-interface Connection<T> {
+interface Connection {
     val name: String
-    val realDevice: T
+    val realDevice: Any
     fun channel1(): Channel?
     fun channel2(): Channel? = null
     fun channel3(): Channel? = null
@@ -26,8 +31,6 @@ interface Connection<T> {
     fun channel7(): Channel? = null
     fun channel8(): Channel? = null
     fun channel9(): Channel? = null
-
-    fun config(configuration: T.() -> Unit)
 
     suspend fun connect(): Result<Unit>
 

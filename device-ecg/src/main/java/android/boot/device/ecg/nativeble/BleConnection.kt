@@ -1,9 +1,10 @@
-package android.boot.device.ecg.ble
+package android.boot.device.ecg.nativeble
 
 import android.annotation.SuppressLint
 import android.boot.common.provider.globalContext
 import android.boot.device.api.Channel
 import android.boot.device.api.Connection
+import android.boot.device.api.State
 import android.content.pm.PackageManager
 import android.util.Log
 import androidx.bluetooth.BluetoothDevice
@@ -15,8 +16,10 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -63,7 +66,7 @@ class CharacteristicChannel(
         }
     }
 
-    override fun listen(): Flow<Result<ByteArray>> {
+    override suspend fun listen(): Flow<Result<ByteArray>> {
         return getCharacteristic()?.let {
             gattScope?.subscribeToCharacteristic(it)?.map { array ->
                 Log.i("_BleConnection", "map:${array.joinToString { "%02X".format(it) }}")
@@ -84,7 +87,8 @@ class CharacteristicChannel(
 abstract class BleConnection(
     override val name: String,
     override val realDevice: BluetoothDevice,
-) : Connection<BluetoothDevice> {
+    private val eventFlow: MutableStateFlow<State>,
+) : Connection {
     private val bluetoothLe by lazy {
         BluetoothLe(globalContext)
     }
@@ -95,32 +99,43 @@ abstract class BleConnection(
 
     private val mutex = Mutex()
 
+    private var job: CompletableDeferred<Unit>? = null
 
-    override fun config(configuration: BluetoothDevice.() -> Unit) {
-        configuration(realDevice)
-    }
 
     @SuppressLint("MissingPermission")
 
     override suspend fun connect(): Result<Unit> = mutex.withLock {
-        if (gattScope != null) return Result.success(Unit)
+        if (gattScope != null) {
+            eventFlow.update { State.Connected }
+            return Result.success(Unit)
+        }
         return withContext(Dispatchers.IO) {
             val latch = CountDownLatch(1)
+            eventFlow.update { State.Connecting }
             bluetoothLe.connectGatt(realDevice) {
                 gattScope = this
                 latch.countDown()
+                job = CompletableDeferred()
+                job?.await()
             }
             latch.await()
-            if (gattScope == null) Result.failure(RuntimeException("Connect failed")) else Result.success(
-                Unit
-            )
+            if (gattScope == null) {
+                eventFlow.update { State.Disconnected }
+                Result.failure(RuntimeException("Connect failed"))
+            } else {
+                eventFlow.update { State.Connected }
+                Result.success(Unit)
+            }
         }
     }
 
 
     override fun disconnect() {
         gattScope = null
+        job?.complete(Unit)
+        job = null
         bluetoothLe.close()
+        eventFlow.update { State.Disconnected }
     }
 
 

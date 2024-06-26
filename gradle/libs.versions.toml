@@ -1,23 +1,26 @@
 [versions]
-agp = "8.4.1"
+agp = "8.4.2"
 androidCommon = "1.0.0-alpha5"
 bleCommon = "1.0.0-alpha2"
+client = "1.0.14"
 kotlin = "1.9.0"
 coreKtx = "1.13.1"
 junit = "4.13.2"
-junitVersion = "1.1.5"
-espressoCore = "3.5.1"
-lifecycleRuntimeKtx = "2.8.1"
+junitVersion = "1.2.0"
+espressoCore = "3.6.0"
+lifecycleRuntimeKtx = "2.8.2"
 activityCompose = "1.9.0"
-composeBom = "2024.05.00"
+composeBom = "2024.06.00"
 appcompat = "1.7.0"
 material = "1.12.0"
+usbSerialForAndroid = "3.7.2"
 #bluetooth = "1.0.0-alpha02"
 
 [libraries]
 android-common = { module = "io.github.zhangwenxue:android-common", version.ref = "androidCommon" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 ble-common = { module = "io.github.zhangwenxue:ble-common", version.ref = "bleCommon" }
+client = { module = "no.nordicsemi.android.kotlin.ble:client", version.ref = "client" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
@@ -33,6 +36,8 @@ androidx-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit
 androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
 androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
+scanner = { module = "no.nordicsemi.android.kotlin.ble:scanner", version.ref = "client" }
+usb-serial4android = { module = "com.github.mik3y:usb-serial-for-android", version.ref = "usbSerialForAndroid" }
 #androidx-bluetooth = { group = "androidx.bluetooth", name = "bluetooth", version.ref = "bluetooth" }
 
 [plugins]

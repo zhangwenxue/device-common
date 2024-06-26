@@ -1,11 +1,11 @@
-package android.boot.device.ecg.ble
+package android.boot.device.ecg.nativeble
 
 import android.annotation.SuppressLint
 import android.boot.common.provider.globalContext
-import android.boot.device.api.Device
 import android.boot.device.api.DeviceDiscovery
 import android.boot.device.api.DeviceFilter
-import androidx.bluetooth.BluetoothDevice
+import android.boot.device.api.ECGDevice
+import android.boot.device.api.Transmission
 import androidx.bluetooth.BluetoothLe
 import androidx.bluetooth.ScanFilter
 import kotlinx.coroutines.CoroutineScope
@@ -25,21 +25,23 @@ import kotlin.time.Duration.Companion.milliseconds
 
 data class BleDevice3GenFilter(
     override val name: String = "WWKECG12E",
-    override val nameMask: String = ""
+    override val nameMask: String = "",
+    override val transmission: Transmission = Transmission.Ble
+
 ) : DeviceFilter
 
-class BleDeviceDiscovery : DeviceDiscovery<BluetoothDevice> {
+class BleDeviceDiscovery : DeviceDiscovery {
     private val bluetoothLe by lazy {
         BluetoothLe(globalContext)
     }
 
     private val innerScope = CoroutineScope(Dispatchers.Default)
-    private var scanResultList = listOf<Device<BluetoothDevice>>()
+    private var scanResultList = listOf<ECGDevice>()
 
     @Volatile
     private var scanJobs: Job? = null
 
-    private val _scanResultFlow = MutableStateFlow<Result<List<Device<BluetoothDevice>>>>(
+    private val _scanResultFlow = MutableStateFlow<Result<List<ECGDevice>>>(
         Result.success(
             emptyList()
         )
@@ -115,11 +117,11 @@ class BleDeviceDiscovery : DeviceDiscovery<BluetoothDevice> {
         scanJobs = job
     }
 
-    override val deviceFlow: Flow<Result<List<Device<BluetoothDevice>>>>
+    override val deviceFlow: Flow<Result<List<ECGDevice>>>
         get() = _scanResultFlow
 
 
-    override fun cancel(): Result<Unit> {
+    override fun stop(): Result<Unit> {
         scanJobs?.cancel()
         return Result.success(Unit)
     }
