@@ -103,21 +103,23 @@ class UsbCdcTransfer(private val config: UsbConfig) : Listener {
         }
     }
 
-    fun startEcgCollect(command: ByteArray) {
-        Log.i(TAG, "start ecg collect")
-        if (usbIoManager.state != SerialInputOutputManager.State.STOPPED) return
-        config.run {
-            usbIoManager.readBufferSize = USB_TRANSFER_BUFFER_SIZE
-            Log.i(TAG, "read buffer size:${usbIoManager.readBufferSize}")
-            usbIoManager.start()
-            usbIoManager.readBufferSize
-            port.write(command, WRITE_WAIT_MILLIS.toInt())
-            isCollecting = true
-            ReadThread().start()
+    fun startEcgCollect(command: ByteArray): Result<Unit> {
+        return runCatching {
+            Log.i(TAG, "start ecg collect")
+            if (usbIoManager.state != SerialInputOutputManager.State.STOPPED) return@runCatching
+            config.run {
+                usbIoManager.readBufferSize = USB_TRANSFER_BUFFER_SIZE
+                Log.i(TAG, "read buffer size:${usbIoManager.readBufferSize}")
+                usbIoManager.start()
+                usbIoManager.readBufferSize
+                port.write(command, WRITE_WAIT_MILLIS.toInt())
+                isCollecting = true
+                ReadThread().start()
+            }
         }
     }
 
-    fun stop(command: ByteArray) {
+    fun write(command: ByteArray) {
         if (usbIoManager.state == SerialInputOutputManager.State.STOPPED) return
         Log.i(TAG, "stop usb port")
         stopCmd = command
@@ -129,6 +131,10 @@ class UsbCdcTransfer(private val config: UsbConfig) : Listener {
             )
             usbIoManager.stop()
         }
+    }
+
+    fun stop(command: ByteArray) {
+        write(command)
     }
 
     fun close() {

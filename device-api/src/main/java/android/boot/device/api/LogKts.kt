@@ -20,7 +20,7 @@ object DeviceLog {
             }
         }
 
-        if (throwable != null) Log.w(tag, log, throwable)
-        else Log.i(tag, log)
+        if (throwable != null) Log.w(tag, "${Thread.currentThread().name}:$log", throwable)
+        else Log.i(tag, "${Thread.currentThread().name}:$log")
     }
 }

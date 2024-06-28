@@ -34,5 +34,6 @@ interface ECGDevice {
 
     suspend fun write(dest: ByteArray, timeoutMillis: Int, autoClose: Boolean): Result<Unit>
     suspend fun listen(): Flow<Result<ByteArray>>
+    suspend fun stopListen(): Result<Unit>
     fun close()
 }

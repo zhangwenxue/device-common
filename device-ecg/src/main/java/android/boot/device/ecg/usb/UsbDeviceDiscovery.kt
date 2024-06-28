@@ -19,17 +19,13 @@ import android.hardware.usb.UsbManager.ACTION_USB_DEVICE_ATTACHED
 import android.os.Build
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.job
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withTimeout
-import kotlin.coroutines.cancellation.CancellationException
-import kotlin.coroutines.resume
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 sealed class UsbId(val usbFilter: (Int, Int) -> Boolean) {
     data object Usb2G :
@@ -60,51 +56,44 @@ class UsbDeviceDiscovery : DeviceDiscovery {
         private val USB_PERMISSION = "${globalContext.packageName}.USB_PERMISSION"
     }
 
-    private val innerScope = CoroutineScope(Dispatchers.Default)
-
     private val usbManager by lazy {
         globalContext.getSystemService(UsbManager::class.java)
     }
 
-    private val _scanResultFlow = MutableStateFlow<Result<List<ECGDevice>>>(
-        Result.success(
-            emptyList()
-        )
-    )
-
     private var deviceFilters: List<DeviceFilter> = listOf()
 
-    override val deviceFlow = _scanResultFlow
 
     override fun discover(
         scope: CoroutineScope?,
         timeoutMills: Long,
         vararg deviceFilters: DeviceFilter
-    ) {
+    ): Flow<Result<List<ECGDevice>>> {
         this.deviceFilters = deviceFilters.asList()
-        innerScope.launch {
+        return flow {
+            DeviceLog.log("<Usb> Start ecg discovery")
             var device = pickDevice()
-            if (device == null) device = waitForUsbAttachment()
+            if (device == null)
+                device = waitForUsbAttachment(timeoutMills)
             if (device == null) {
-                DeviceLog.log("No usb device attached!")
-                _scanResultFlow.tryEmit(Result.failure(Throwable("No usb device attached!")))
-                return@launch
+                DeviceLog.log("<Usb> No usb device attached!")
+                emit(Result.failure(Throwable("No usb device attached!")))
+                return@flow
             }
             if (usbManager.hasPermission(device)) {
                 device.asEcgDevice?.let { ecg ->
-                    _scanResultFlow.tryEmit(Result.success(listOf(ecg)))
+                    emit(Result.success(listOf(ecg)))
                 }
-                return@launch
+                return@flow
             }
-
+            DeviceLog.log("<Usb> Request permission")
             device = requestPermission(device)
             if (device == null) {
-                _scanResultFlow.tryEmit(Result.failure(Throwable("Usb permission denied")))
-                return@launch
+                emit(Result.failure(Throwable("Usb permission denied")))
+                return@flow
             }
 
             device.asEcgDevice?.let { ecg ->
-                _scanResultFlow.tryEmit(Result.success(listOf(ecg)))
+                emit(Result.success(listOf(ecg)))
             }
         }
     }
@@ -140,75 +129,49 @@ class UsbDeviceDiscovery : DeviceDiscovery {
 
 
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
-    private suspend fun waitForUsbAttachment(timeoutMills: Long = 5_000L): UsbDevice? =
-        coroutineScope {
-            var device: UsbDevice? = null
-            var usbAttachmentReceiver: BroadcastReceiver? = null
+    private fun waitForUsbAttachment(timeoutMills: Long = 5_000L): UsbDevice? {
+        val latch = CountDownLatch(1)
+        var usbAttachmentReceiver: BroadcastReceiver? = null
+        var device: UsbDevice? = null
 
-            DeviceLog.log("Wait ${timeoutMills}ms for usb attachment")
-
-            try {
-                withTimeout(timeoutMills) {
-                    suspendCancellableCoroutine { continuation ->
-                        usbAttachmentReceiver = object : BroadcastReceiver() {
-                            override fun onReceive(context: Context?, intent: Intent?) {
-                                when (intent?.action) {
-                                    ACTION_USB_DEVICE_ATTACHED -> {
-                                        runCatching {
-                                            usbAttachmentReceiver?.let {
-                                                globalContext.unregisterReceiver(
-                                                    it
-                                                )
-                                            }
-                                        }
-                                        device = pickDevice()
-                                        DeviceLog.log("Usb attached: ${device?.deviceName}")
-                                        if (continuation.isActive) {
-                                            if (device != null) {
-                                                continuation.resume(Unit)
-                                            } else {
-                                                continuation.cancel(CancellationException("Wait for attachment failed."))
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        runCatching {
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                globalContext.registerReceiver(
-                                    usbAttachmentReceiver,
-                                    IntentFilter(ACTION_USB_DEVICE_ATTACHED),
-                                    Context.RECEIVER_EXPORTED
-                                )
-                            } else {
-                                globalContext.registerReceiver(
-                                    usbAttachmentReceiver,
-                                    IntentFilter(ACTION_USB_DEVICE_ATTACHED)
-                                )
-                            }
-                        }
-
-                        continuation.invokeOnCancellation {
-                            DeviceLog.log("Coroutine was cancelled or timed out")
-                            runCatching {
-                                usbAttachmentReceiver?.let { globalContext.unregisterReceiver(it) }
-                            }
+        DeviceLog.log("<Usb> waitFor $timeoutMills ms")
+        usbAttachmentReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent?.action == ACTION_USB_DEVICE_ATTACHED) {
+                    runCatching {
+                        usbAttachmentReceiver?.let {
+                            globalContext.unregisterReceiver(it)
                         }
                     }
-                }
-            } catch (e: TimeoutCancellationException) {
-                DeviceLog.log("Timeout while waiting for USB attachment")
-            } finally {
-                runCatching {
-                    usbAttachmentReceiver?.let { globalContext.unregisterReceiver(it) }
+                    device = pickDevice()
+                    DeviceLog.log("<Usb> Usb attached: ${device?.deviceName}")
+                    latch.count
                 }
             }
-
-            DeviceLog.log("Waiting stopped: ${device?.deviceName}")
-            device
         }
+
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                globalContext.registerReceiver(
+                    usbAttachmentReceiver,
+                    IntentFilter(ACTION_USB_DEVICE_ATTACHED),
+                    Context.RECEIVER_EXPORTED
+                )
+            } else {
+                globalContext.registerReceiver(
+                    usbAttachmentReceiver,
+                    IntentFilter(ACTION_USB_DEVICE_ATTACHED)
+                )
+            }
+        }
+
+        latch.await(timeoutMills, TimeUnit.MILLISECONDS)
+        runCatching {
+            globalContext.unregisterReceiver(usbAttachmentReceiver)
+        }
+        DeviceLog.log("<Usb> Detect result: $device")
+        return device
+    }
 
 
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
@@ -217,7 +180,7 @@ class UsbDeviceDiscovery : DeviceDiscovery {
             val waitResult = CompletableDeferred<Unit>(parent = coroutineContext.job)
             var device: UsbDevice? = null
             var usbPermissionReceiver: BroadcastReceiver? = null
-            DeviceLog.log("Request usb permission")
+            DeviceLog.log("<Usb> Request usb permission")
 
             usbPermissionReceiver = object : BroadcastReceiver() {
                 override fun onReceive(context: Context?, intent: Intent?) {
@@ -228,7 +191,7 @@ class UsbDeviceDiscovery : DeviceDiscovery {
                             }
                             device = pickDevice()
                             DeviceLog.log(
-                                "Usb permission request result:${
+                                "<Usb> Usb permission request result:${
                                     device?.let {
                                         usbManager.hasPermission(
                                             it

@@ -12,6 +12,7 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -65,11 +66,15 @@ class UsbCdcChannel(
     }
 
     override suspend fun write(dest: ByteArray, timeoutMillis: Int): Result<Unit> {
+        cdcTransfer?.write(dest)
         return Result.success(Unit)
     }
 
     override suspend fun listen(): Flow<Result<ByteArray>> {
         cdcTransfer?.startEcgCollect(byteArrayOf(0xA5.toByte(), 0x03, 0x00, 0x03, 0x5A))
+            ?.onFailure {
+                return flowOf(Result.failure(Throwable("Device Closed")))
+            }
         return callbackFlow {
             cdcTransfer?.listener = object : SerialInputOutputManager.Listener {
                 override fun onNewData(data: ByteArray?) {

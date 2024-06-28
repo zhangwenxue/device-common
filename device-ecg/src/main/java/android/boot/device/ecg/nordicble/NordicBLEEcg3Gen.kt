@@ -2,6 +2,7 @@ package android.boot.device.ecg.nordicble
 
 import android.boot.device.api.Channel
 import android.boot.device.api.ChannelNotFoundException
+import android.boot.device.api.DeviceLog
 import android.boot.device.api.ECGDevice
 import android.boot.device.api.Gen
 import android.boot.device.api.State
@@ -85,9 +86,24 @@ class NordicBleEcg3G(
     }
 
     override suspend fun listen(): Flow<Result<ByteArray>> {
+        DeviceLog.log("<BLE> prepare to listen,checking connection...")
         val connected = connection.connect()
-        if (connected.isFailure) return flowOf(Result.failure(Throwable("Device connection failure:${connected.exceptionOrNull()?.message}")))
+        if (connected.isFailure) return flowOf<Result<ByteArray>>(Result.failure(Throwable("Device connection failure:${connected.exceptionOrNull()?.message}"))).also {
+            DeviceLog.log("<BLE> Failed to establish ble connection:${connected.exceptionOrNull()?.message}")
+        }
+        DeviceLog.log("<BLE> Write collect cmd bytes")
+        write(byteArrayOf(0xA5.toByte(), 0x09, 0x00, 0x09, 0x5A), 100, false)
+        DeviceLog.log("<BLE> Starting listening")
         return connection.channel2()?.listen() ?: flowOf()
+    }
+
+    override suspend fun stopListen(): Result<Unit> {
+        DeviceLog.log("<BLE> Stopping listening")
+        return write(byteArrayOf(0xA5.toByte(), 0x04, 0x00, 0x04, 0x5A), 100, false).onSuccess {
+            DeviceLog.log("<BLE> Stop listen success")
+        }.onFailure {
+            DeviceLog.log("<BLE> Stop listen failed", throwable = it)
+        }
     }
 
     override fun close() {

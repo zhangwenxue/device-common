@@ -20,7 +20,7 @@ class UsbEcg(
 ) : ECGDevice {
     private val _eventFlow: MutableStateFlow<State> = MutableStateFlow(State.Idle)
     override val eventFlow: Flow<State> = _eventFlow
-    override val connection: Connection = UsbConnection(name, realDevice,_eventFlow)
+    override val connection: Connection = UsbConnection(name, realDevice, _eventFlow)
 
     override suspend fun read(
         dest: ByteArray?,
@@ -53,8 +53,13 @@ class UsbEcg(
     override suspend fun listen(): Flow<Result<ByteArray>> {
         val connected = connection.connect()
         if (connected.isFailure) return flowOf(Result.failure(Throwable("Device connection failure:${connected.exceptionOrNull()?.message}")))
+        write(byteArrayOf(0xA5.toByte(), 0x09, 0x00, 0x09, 0x5A), 100, false)
         return connection.channel1()?.listen() ?: flowOf()
 
+    }
+
+    override suspend fun stopListen(): Result<Unit> {
+        return write(byteArrayOf(0xA5.toByte(), 0x04, 0x00, 0x04, 0x5A), 100, false)
     }
 
     override fun close() {

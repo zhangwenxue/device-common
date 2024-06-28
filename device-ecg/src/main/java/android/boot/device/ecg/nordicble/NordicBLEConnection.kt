@@ -16,9 +16,12 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
@@ -80,9 +83,10 @@ class NordicCharacteristicChannel(
 
     override suspend fun listen(): Flow<Result<ByteArray>> {
         return getCharacteristic()?.getNotifications(bufferOverflow = BufferOverflow.SUSPEND)
-            ?.map {
-                Result.success(it.value)
-            } ?: flowOf(Result.failure(ChannelNotFoundException))
+            ?.filterIsInstance(DataByteArray::class)
+            ?.filterNotNull()
+            ?.map { Result.success(it.value) }
+            ?: flowOf(Result.failure(ChannelNotFoundException))
     }
 
     private fun getCharacteristic(): ClientBleGattCharacteristic? {
@@ -105,30 +109,36 @@ abstract class NordicBleConnection(
 
     @SuppressLint("MissingPermission")
     override suspend fun connect(): Result<Unit> = mutex.withLock {
+        DeviceLog.log("<BLE> Check connection.")
         if (this.client != null) {
             eventFlow.update { State.Connected }
+            DeviceLog.log("<BLE> Connection already established.")
             return Result.success(Unit)
         }
 
         eventFlow.update { State.Connecting }
+        DeviceLog.log("<BLE> Connecting...")
         runCatching {
             val client = ClientBleGatt.connect(globalContext, realDevice, scope)
-            client.connectionStateWithStatus.collectLatest {
-                it?.run {
-                    DeviceLog.log("NordicS&S", "state:$state,status:$status")
-                    when {
-                        state == GattConnectionState.STATE_DISCONNECTED -> eventFlow.update { State.Disconnected }
-                        status == BleGattConnectionStatus.UNKNOWN -> eventFlow.update { State.Disconnected }
-                        status == BleGattConnectionStatus.SUCCESS -> eventFlow.update { State.Connected }
-                        status == BleGattConnectionStatus.TERMINATE_LOCAL_HOST -> eventFlow.update { State.Disconnected }
-                        status == BleGattConnectionStatus.TERMINATE_PEER_USER -> eventFlow.update { State.Disconnected }
-                        status == BleGattConnectionStatus.LINK_LOSS -> eventFlow.update { State.Disconnected }
-                        status == BleGattConnectionStatus.CANCELLED -> eventFlow.update { State.Disconnected }
-                        status == BleGattConnectionStatus.TIMEOUT -> eventFlow.update { State.Disconnected }
-                    }
+            scope.launch {
+                client.connectionStateWithStatus.collectLatest {
+                    it?.run {
+                        DeviceLog.log("NordicS&S", "state:$state,status:$status")
+                        when {
+                            state == GattConnectionState.STATE_DISCONNECTED -> eventFlow.update { State.Disconnected }
+                            status == BleGattConnectionStatus.UNKNOWN -> eventFlow.update { State.Disconnected }
+                            status == BleGattConnectionStatus.SUCCESS -> eventFlow.update { State.Connected }
+                            status == BleGattConnectionStatus.TERMINATE_LOCAL_HOST -> eventFlow.update { State.Disconnected }
+                            status == BleGattConnectionStatus.TERMINATE_PEER_USER -> eventFlow.update { State.Disconnected }
+                            status == BleGattConnectionStatus.LINK_LOSS -> eventFlow.update { State.Disconnected }
+                            status == BleGattConnectionStatus.CANCELLED -> eventFlow.update { State.Disconnected }
+                            status == BleGattConnectionStatus.TIMEOUT -> eventFlow.update { State.Disconnected }
+                        }
 
+                    }
                 }
             }
+
             if (!client.isConnected) {
                 eventFlow.update { State.Disconnected }
                 return Result.failure(RuntimeException("failed to connect to gatt!"))
@@ -137,7 +147,9 @@ abstract class NordicBleConnection(
             val services = client.discoverServices()
             onConfigureChannel(client, services)
             eventFlow.update { State.Connected }
-            return Result.success(Unit)
+            return Result.success(Unit).also {
+                DeviceLog.log("<BLE> Connection established.")
+            }
         }.onFailure { eventFlow.update { State.Disconnected } }
     }
 
