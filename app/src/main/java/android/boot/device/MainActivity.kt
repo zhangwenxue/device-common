@@ -55,12 +55,28 @@ fun Demo(modifier: Modifier = Modifier, bleScope: BLEPermission) {
         mutableStateOf("")
     }
 
+
+    var sn: String by remember {
+        mutableStateOf("")
+    }
+
+    var writeSN: String by remember {
+        mutableStateOf("")
+    }
+
+    var version: String by remember {
+        mutableStateOf("")
+    }
+
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val state = ECGSdk.statusFlow.collectAsState()
     Column(modifier = modifier) {
         Text(text = ecgDevice)
         Text(text = "State:${state.value}")
+        Text(text = "SN:$sn")
+        Text(text = "WriteSN:$writeSN")
+        Text(text = "Version:$version")
         Button(onClick = {
             ecgDevice = "--"
             scope.launch {
@@ -101,6 +117,33 @@ fun Demo(modifier: Modifier = Modifier, bleScope: BLEPermission) {
             }
         }) {
             Text(text = "collect")
+        }
+
+        Button(onClick = {
+            scope.launch {
+                ECGSdk.readSN().onSuccess { sn = it }.onFailure { sn = it.message ?: "error" }
+            }
+        }) {
+            Text(text = "read sn")
+        }
+
+        Button(onClick = {
+            scope.launch {
+                ECGSdk.readVersion().onSuccess { version = it }
+                    .onFailure { version = it.message ?: "error" }
+            }
+        }) {
+            Text(text = "read version")
+        }
+
+        Button(onClick = {
+            scope.launch {
+                ECGSdk.writeSn(/*"2024-${(0..10).random()}"*/"C1220230304000000")
+                    .onSuccess { writeSN = "Write success" }
+                    .onFailure { writeSN = it.message ?: "error" }
+            }
+        }) {
+            Text(text = "write sn")
         }
 
         Text(text = dataCollection)

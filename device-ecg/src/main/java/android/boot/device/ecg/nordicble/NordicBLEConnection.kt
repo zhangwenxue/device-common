@@ -60,7 +60,7 @@ class NordicCharacteristicChannel(
     private var characteristic: ClientBleGattCharacteristic? = null
 
     @SuppressLint("MissingPermission")
-    override suspend fun read(src: ByteArray?, timeoutMillis: Int): Result<ByteArray> {
+    override suspend fun read(src: ByteArray, timeoutMillis: Int): Result<ByteArray> {
         return runCatching {
             withTimeout(timeoutMillis.toLong()) {
                 getCharacteristic()?.read()?.value ?: throw throw ChannelNotFoundException
@@ -87,6 +87,14 @@ class NordicCharacteristicChannel(
             ?.filterNotNull()
             ?.map { Result.success(it.value) }
             ?: flowOf(Result.failure(ChannelNotFoundException))
+    }
+
+    override suspend fun stopListen(): Result<Unit> {
+        return write(byteArrayOf(0xA5.toByte(), 0x04, 0x00, 0x04, 0x5A), 100).onSuccess {
+            DeviceLog.log("<BLE> Stop listen success")
+        }.onFailure {
+            DeviceLog.log("<BLE> Stop listen failed", throwable = it)
+        }
     }
 
     private fun getCharacteristic(): ClientBleGattCharacteristic? {

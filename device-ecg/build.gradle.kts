@@ -42,7 +42,7 @@ dependencies {
     implementation(project(":device-api"))
     implementation(libs.android.common)
     implementation(libs.scanner)
-    implementation("com.github.mik3y:usb-serial-for-android:3.7.2")
+    implementation(libs.usb.serial4android)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

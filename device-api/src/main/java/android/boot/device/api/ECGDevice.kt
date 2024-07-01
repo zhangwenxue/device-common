@@ -27,7 +27,7 @@ interface ECGDevice {
     val gen: Gen
     val eventFlow: Flow<State>
     suspend fun read(
-        dest: ByteArray? = null,
+        dest: ByteArray,
         timeoutMillis: Int,
         autoClose: Boolean
     ): Result<ByteArray>
@@ -35,5 +35,8 @@ interface ECGDevice {
     suspend fun write(dest: ByteArray, timeoutMillis: Int, autoClose: Boolean): Result<Unit>
     suspend fun listen(): Flow<Result<ByteArray>>
     suspend fun stopListen(): Result<Unit>
+    suspend fun readSN(autoClose: Boolean): Result<String>
+    suspend fun writeSN(sn:String,autoClose: Boolean): Result<Unit>
+    suspend fun readVersion(autoClose: Boolean): Result<String>
     fun close()
 }

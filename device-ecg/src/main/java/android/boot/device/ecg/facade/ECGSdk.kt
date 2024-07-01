@@ -123,6 +123,32 @@ object ECGSdk {
         return deviceRet.getOrThrow().listen()
     }
 
+    suspend fun readSN(autoDiscover: Boolean = true, autoClose: Boolean = false): Result<String> {
+        val deviceRet = checkDevice(autoDiscover)
+        if (deviceRet.isFailure) return Result.failure(Throwable("No ECG device found"))
+        return deviceRet.getOrThrow().readSN(autoClose)
+    }
+
+
+    suspend fun readVersion(
+        autoDiscover: Boolean = true,
+        autoClose: Boolean = false
+    ): Result<String> {
+        val deviceRet = checkDevice(autoDiscover)
+        if (deviceRet.isFailure) return Result.failure(Throwable("No ECG device found"))
+        return deviceRet.getOrThrow().readVersion(autoClose)
+    }
+
+    suspend fun writeSn(
+        sn: String,
+        autoDiscover: Boolean = true,
+        autoClose: Boolean = false
+    ): Result<Unit> {
+        val deviceRet = checkDevice(autoDiscover)
+        if (deviceRet.isFailure) return Result.failure(Throwable("No ECG device found"))
+        return deviceRet.getOrThrow().writeSN(sn, autoClose)
+    }
+
     fun disconnect() {
         targetDevice?.run {
             this.close()
@@ -141,20 +167,10 @@ object ECGSdk {
         }
     }
 
-    suspend fun readSn(autoDiscover: Boolean = true): Result<String> {
-        return Result.success("NO_SN")
-    }
-
-    suspend fun writeSn(sn: String, autoDiscover: Boolean = true): Result<Unit> {
-        return Result.success(Unit)
-    }
-
     private suspend fun checkDevice(autoDiscover: Boolean = false): Result<ECGDevice> {
         val device = targetDevice
         return if (device != null) {
-            Result.success(device).also {
-                DeviceLog.log("<Agent> ECG device already exists.")
-            }
+            Result.success(device)
         } else {
             if (!autoDiscover) {
                 Result.failure<ECGDevice>(Throwable("You must setup an ECG device first"))

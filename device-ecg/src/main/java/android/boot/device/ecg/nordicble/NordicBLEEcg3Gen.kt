@@ -58,7 +58,7 @@ class NordicBleEcg3G(
     override val eventFlow = _eventFlow
 
     override suspend fun read(
-        dest: ByteArray?,
+        dest: ByteArray,
         timeoutMillis: Int,
         autoClose: Boolean
     ): Result<ByteArray> {
@@ -99,11 +99,19 @@ class NordicBleEcg3G(
 
     override suspend fun stopListen(): Result<Unit> {
         DeviceLog.log("<BLE> Stopping listening")
-        return write(byteArrayOf(0xA5.toByte(), 0x04, 0x00, 0x04, 0x5A), 100, false).onSuccess {
-            DeviceLog.log("<BLE> Stop listen success")
-        }.onFailure {
-            DeviceLog.log("<BLE> Stop listen failed", throwable = it)
-        }
+        return connection.channel1()?.stopListen()?: Result.failure(ChannelNotFoundException)
+    }
+
+    override suspend fun readSN(autoClose: Boolean): Result<String> {
+        return Result.failure(Throwable("readSN not supported"))
+    }
+
+    override suspend fun writeSN(sn: String, autoClose: Boolean): Result<Unit> {
+        return Result.failure(Throwable("writeSN not supported"))
+    }
+
+    override suspend fun readVersion(autoClose: Boolean): Result<String> {
+        return Result.failure(Throwable("getVersion not supported"))
     }
 
     override fun close() {

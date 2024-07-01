@@ -13,7 +13,7 @@ activityCompose = "1.9.0"
 composeBom = "2024.06.00"
 appcompat = "1.7.0"
 material = "1.12.0"
-usbSerialForAndroid = "3.7.2"
+usbSerialForAndroid = "3.7.3"
 #bluetooth = "1.0.0-alpha02"
 
 [libraries]
