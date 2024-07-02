@@ -3,26 +3,34 @@ package android.boot.device.ecg.usb
 import android.boot.common.provider.globalContext
 import android.boot.device.api.Channel
 import android.boot.device.api.Connection
-import android.boot.device.api.State
+import android.boot.device.api.DeviceLog
+import android.boot.device.ecg.util.ECG3GenParser
+import android.boot.device.ecg.util.Ecg3GenCommand.START_BLE_COLLECT_CMD
+import android.boot.device.ecg.util.Ecg3GenCommand.START_USB_COLLECT_CMD
+import android.boot.device.ecg.util.Ecg3GenCommand.STOP_COLLECT_CMD
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import com.hoho.android.usbserial.driver.UsbSerialProber
-import com.hoho.android.usbserial.util.SerialInputOutputManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 class UsbCdcChannel(
     override val id: String,
     override val name: String?,
     private val usbDevice: UsbDevice,
-    private val eventFlow: MutableStateFlow<State>
 ) : Channel {
+    companion object {
+        val UNCONNECTED_ERROR = Throwable("Usb connection unestablished!")
+    }
+
     private val usbManager by lazy {
         globalContext.getSystemService(UsbManager::class.java)
     }
@@ -32,87 +40,98 @@ class UsbCdcChannel(
     }
 
     private var cdcTransfer: UsbCdcTransfer? = null
-
     private val mutex = Mutex()
 
-    suspend fun connect(): Result<Unit> = mutex.withLock {
-        if (cdcTransfer != null) {
-            eventFlow.update { State.Connected }
-            return Result.success(Unit)
-        }
-        eventFlow.update { State.Connecting }
-        val connection = usbManager.openDevice(usbDevice)
-            ?: return Result.failure<Unit>(Throwable("Failed to create usb connection")).also {
-                eventFlow.update { State.Disconnected }
+    suspend fun connect(): Result<Unit> {
+        return mutex.withLock {
+            withContext(Dispatchers.IO) {
+                if (cdcTransfer != null) {
+                    return@withContext Result.success(Unit)
+                }
+                val connection = usbManager.openDevice(usbDevice)
+                    ?: return@withContext Result.failure<Unit>(Throwable("Failed to create usb connection"))
+                val port = driver?.ports?.firstOrNull()
+                    ?: return@withContext Result.failure<Unit>(Throwable("Failed to find driver port"))
+                cdcTransfer = UsbCdcTransfer(connection, port)
+                val result = cdcTransfer?.ensureConnection()?.onFailure {
+                    cdcTransfer = null
+                } ?: Result.failure(Throwable("CdcTransfer not initialized"))
+                result
             }
-        val port = driver?.ports?.firstOrNull()
-            ?: return Result.failure<Unit>(Throwable("Failed to find driver port")).also {
-                eventFlow.update { State.Disconnected }
-            }
-        cdcTransfer = UsbCdcTransfer(connection, port)
-        val result = cdcTransfer?.openDevice()?.onFailure {
-            cdcTransfer = null
-            eventFlow.update { State.Disconnected }
-        }?.onSuccess {
-            eventFlow.update { State.Connected }
-        } ?: Result.failure<Unit>(Throwable("CdcTransfer not initialized")).also {
-            eventFlow.update { State.Disconnected }
         }
-        return result
     }
 
-    override suspend fun read(src: ByteArray?, timeoutMillis: Int): Result<ByteArray> {
-        return Result.success(byteArrayOf())
+    override suspend fun read(src: ByteArray, timeoutMillis: Int) = runCatching {
+        cdcTransfer?.read(src, timeoutMillis)?.getOrThrow() ?: throw UNCONNECTED_ERROR
     }
 
-    override suspend fun write(dest: ByteArray, timeoutMillis: Int): Result<Unit> {
-        cdcTransfer?.write(dest)
-        return Result.success(Unit)
+    override suspend fun write(dest: ByteArray, timeoutMillis: Int) = runCatching {
+        cdcTransfer?.write(dest, timeoutMillis)?.getOrThrow() ?: throw UNCONNECTED_ERROR
     }
 
     override suspend fun listen(): Flow<Result<ByteArray>> {
-        cdcTransfer?.startEcgCollect(byteArrayOf(0xA5.toByte(), 0x03, 0x00, 0x03, 0x5A))
-            ?.onFailure {
-                return flowOf(Result.failure(Throwable("Device Closed")))
-            }
-        return callbackFlow {
-            cdcTransfer?.listener = object : SerialInputOutputManager.Listener {
-                override fun onNewData(data: ByteArray?) {
-                    data?.run { trySend(Result.success(this)) }
-                }
+        val startRet = cdcTransfer
+            ?.startEcgCollect(START_USB_COLLECT_CMD)
+            ?: Result.failure(UNCONNECTED_ERROR)
 
-                override fun onRunError(e: Exception?) {
-                    trySend(Result.failure(e ?: Throwable("Cdc Error")))
+        if (startRet.isFailure) {
+            return flowOf(Result.failure(UNCONNECTED_ERROR))
+        }
+
+        return callbackFlow {
+            withContext(Dispatchers.IO) {
+                while (cdcTransfer?.isCollecting() == true) {
+                    cdcTransfer?.readFromBuffer()?.takeIf { it.isNotEmpty() }?.run {
+                        trySend(Result.success(this))
+                    }
                 }
+            }
+            cdcTransfer?.runErrorAction = {
+                trySend(Result.failure(it ?: Throwable("Usb CDC UnKnown Error")))
+                close()
             }
             awaitClose {
-                disconnect()
+                CoroutineScope(Dispatchers.IO).launch {
+                    stopListen()
+                    disconnect()
+                }
             }
         }
     }
 
-    fun disconnect() {
-        cdcTransfer?.stop(byteArrayOf(0xA5.toByte(), 0x04, 0x00, 0x04, 0x5A))
-        cdcTransfer?.close()
-        cdcTransfer = null
-        eventFlow.update { State.Disconnected }
+    override suspend fun stopListen(): Result<Unit> {
+        return withContext(Dispatchers.IO) {
+            cdcTransfer?.stop(STOP_COLLECT_CMD) ?: Result.success("No Need to stop listen").also {
+                DeviceLog.log("_usb_transfer", "No need to stop listen")
+            }
+            Result.success(Unit)
+        }
+    }
+
+    suspend fun disconnect() {
+        withContext(Dispatchers.IO) {
+            mutex.withLock {
+                cdcTransfer?.stop(ECG3GenParser.packStopCollectCmd())
+                cdcTransfer?.close()
+                cdcTransfer = null
+            }
+        }
     }
 }
 
 class UsbConnection(
     override val name: String,
     override val realDevice: UsbDevice,
-    eventFlow: MutableStateFlow<State>
 ) :
     Connection {
-    private val channel1 = UsbCdcChannel("0", "channel1", realDevice, eventFlow)
+    private val channel1 = UsbCdcChannel("0", "channel1", realDevice)
     override fun channel1() = channel1
 
     override suspend fun connect(): Result<Unit> {
         return channel1.connect()
     }
 
-    override fun disconnect() {
+    override suspend fun disconnect() {
         channel1.disconnect()
     }
 }

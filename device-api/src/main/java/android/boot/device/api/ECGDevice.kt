@@ -10,14 +10,6 @@ enum class Gen {
     Gen2, Gen3
 }
 
-sealed class State {
-    data object Idle : State()
-    data object Connecting : State()
-    data object Connected : State()
-    data object Disconnected : State()
-}
-
-
 interface ECGDevice {
     val name: String
     val mac: String
@@ -25,7 +17,6 @@ interface ECGDevice {
     val connection: Connection
     val transmission: Transmission
     val gen: Gen
-    val eventFlow: Flow<State>
     suspend fun read(
         dest: ByteArray,
         timeoutMillis: Int,
@@ -36,7 +27,7 @@ interface ECGDevice {
     suspend fun listen(): Flow<Result<ByteArray>>
     suspend fun stopListen(): Result<Unit>
     suspend fun readSN(autoClose: Boolean): Result<String>
-    suspend fun writeSN(sn:String,autoClose: Boolean): Result<Unit>
+    suspend fun writeSN(sn: String, autoClose: Boolean): Result<Unit>
     suspend fun readVersion(autoClose: Boolean): Result<String>
-    fun close()
+    suspend fun close()
 }

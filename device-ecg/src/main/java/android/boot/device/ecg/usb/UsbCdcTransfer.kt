@@ -1,14 +1,21 @@
 package android.boot.device.ecg.usb
 
+import android.boot.common.extensions.asHexString
+import android.boot.common.extensions.i
+import android.boot.device.api.DeviceLog
 import android.hardware.usb.UsbDeviceConnection
-import android.os.Handler
-import android.os.HandlerThread
-import android.os.Process
 import android.util.Log
+import com.hoho.android.usbserial.driver.CommonUsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialPort.PARITY_NONE
 import com.hoho.android.usbserial.util.SerialInputOutputManager
 import com.hoho.android.usbserial.util.SerialInputOutputManager.Listener
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
+import java.util.concurrent.locks.ReentrantLock
 import java.util.concurrent.locks.ReentrantReadWriteLock
 
 data class UsbConfig(
@@ -56,6 +63,31 @@ class ReadWriteBuffer(private val bufferSize: Int) {
     }
 }
 
+data class WriteRequest(
+    val response: ByteArray?,
+    val latch: CountDownLatch?,
+    val filter: (ByteArray) -> Boolean
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+
+        other as WriteRequest
+
+        if (!response.contentEquals(other.response)) return false
+        if (filter != other.filter) return false
+
+        return true
+    }
+
+    override fun hashCode(): Int {
+        var result = response?.contentHashCode() ?: 0
+        result = 31 * result + (latch?.hashCode() ?: 0)
+        result = 31 * result + filter.hashCode()
+        return result
+    }
+}
+
 class UsbCdcTransfer(private val config: UsbConfig) : Listener {
     companion object {
         private const val READ_WAIT_MILLIS = 0L
@@ -66,112 +98,157 @@ class UsbCdcTransfer(private val config: UsbConfig) : Listener {
         private const val CACHE_BUFFER_SIZE = 31 * 1000
     }
 
-    var listener: Listener? = null
+    var runErrorAction: ((Throwable?) -> Unit)? = null
+
+    private var writeInfo = WriteRequest(byteArrayOf(), CountDownLatch(1)) { false }
+
+    private var writeLock = ReentrantLock()
+
+    @Volatile
+    private var isCollecting = false
 
     constructor(connection: UsbDeviceConnection, port: UsbSerialPort) : this(
         UsbConfig(connection, port)
     )
 
+    init {
+        SerialInputOutputManager.DEBUG = true
+        CommonUsbSerialPort.DEBUG = true
+    }
+
     private val usbIoManager by lazy {
         SerialInputOutputManager(config.port, this)
     }
 
-    @Volatile
-    private var isCollecting = false
-
     private val readWriteBuffer = ReadWriteBuffer(CACHE_BUFFER_SIZE)
 
-    private val handler by lazy {
-        HandlerThread("cdc_worker").let {
-            it.start()
-            Handler(it.looper)
-        }
-    }
 
-    private var stopCmd: ByteArray? = null
-
-
-    fun openDevice(): Result<Unit> {
+    suspend fun startEcgCollect(command: ByteArray): Result<Unit> {
         return runCatching {
-            Log.i(TAG, "open usb device")
-            config.run {
-                if (port.isOpen) return@runCatching
-                port.open(connection)
-                port.setParameters(baudRate, dataBits, stopBits, parity)
-                port.dtr = true
-            }
-        }
-    }
-
-    fun startEcgCollect(command: ByteArray): Result<Unit> {
-        return runCatching {
-            Log.i(TAG, "start ecg collect")
-            if (usbIoManager.state != SerialInputOutputManager.State.STOPPED) return@runCatching
-            config.run {
-                usbIoManager.readBufferSize = USB_TRANSFER_BUFFER_SIZE
-                Log.i(TAG, "read buffer size:${usbIoManager.readBufferSize}")
-                usbIoManager.start()
-                usbIoManager.readBufferSize
-                port.write(command, WRITE_WAIT_MILLIS.toInt())
+            Log.i(TAG, "${this@UsbCdcTransfer}-start ecg collect")
+            if (isCollecting()) return@runCatching
+            withContext(Dispatchers.IO) {
+                write(command, 200)
                 isCollecting = true
-                ReadThread().start()
             }
         }
     }
 
-    fun write(command: ByteArray) {
-        if (usbIoManager.state == SerialInputOutputManager.State.STOPPED) return
-        Log.i(TAG, "stop usb port")
-        stopCmd = command
-        isCollecting = false
-        if (config.port.isOpen) runCatching {
-            config.port.write(
-                command,
-                READ_WAIT_MILLIS.toInt()
-            )
+    suspend fun write(command: ByteArray, timeoutMills: Int): Result<Unit> {
+        if (isCollecting()) return Result.failure(Throwable("Usb write not support while collecting data"))
+        return runCatching {
+            withContext(Dispatchers.IO) {
+                writeLock.tryLock(timeoutMills.toLong(), TimeUnit.MILLISECONDS)
+                try {
+                    writeInfo =
+                        writeInfo.copy(
+                            response = null,
+                            latch = null,
+                            filter = { true })
+                    config.port.write(command, timeoutMills)
+                } finally {
+                    writeLock.unlock()
+                }
+            }
+        }
+    }
+
+    suspend fun read(command: ByteArray, timeoutMills: Int): Result<ByteArray> {
+        if (command.isEmpty()) return Result.failure(Throwable("Invalid read params"))
+        if (isCollecting()) return Result.failure(Throwable("Usb read not support while collecting data"))
+        return runCatching {
+            withContext(Dispatchers.IO) {
+                writeLock.tryLock(timeoutMills.toLong(), TimeUnit.MILLISECONDS)
+                try {
+                    writeInfo =
+                        writeInfo.copy(
+                            response = null,
+                            latch = CountDownLatch(1),
+                            filter = { it.size > 2 && it[0] == command[0] && it[1] == command[1] })
+                    config.port.write(command, timeoutMills)
+                    writeInfo.latch?.await(timeoutMills.toLong(), TimeUnit.MILLISECONDS)
+                    writeInfo.response ?: throw TimeoutException("Read timeout")
+                } finally {
+                    writeLock.unlock()
+                }
+            }
+        }
+    }
+
+    suspend fun stop(command: ByteArray) {
+        if (notCollecting()) {
+            return
+        }
+
+        runCatching {
+            withContext(Dispatchers.IO) {
+                writeLock.tryLock(5000L, TimeUnit.MILLISECONDS)
+                try {
+                    writeInfo =
+                        writeInfo.copy(
+                            response = null,
+                            latch = null,
+                            filter = { true })
+                    config.port.write(command, 50)
+                } finally {
+                    writeLock.unlock()
+                    isCollecting = false
+                }
+            }
+        }
+    }
+
+    fun close() {
+        Log.i(TAG, "${this@UsbCdcTransfer}-close usb port")
+        runCatching {
+            config.port.close()
             usbIoManager.stop()
         }
     }
 
-    fun stop(command: ByteArray) {
-        write(command)
-    }
-
-    fun close() {
-        isCollecting = false
-        Log.i(TAG, "close usb port")
-        if (config.port.isOpen)
-            config.port.close()
-        runCatching { handler.looper.quit() }
-    }
-
-    //    var no = -1
     override fun onNewData(data: ByteArray?) {
-        data?.run {
-            readWriteBuffer.write(this)
+        if (data == null || data.isEmpty()) return
+        DeviceLog.i("Usb-Collecting", data.asHexString())
+        readWriteBuffer.write(data)
+        if (writeInfo.filter(data)) {
+            writeInfo.latch?.count
+            writeInfo = writeInfo.copy(response = data)
         }
     }
 
     override fun onRunError(e: Exception?) {
-        listener?.onRunError(e)
-        Log.e(TAG, "onRunError", e)
-        stopCmd?.let { stop(it) }
-        close()
+        runErrorAction?.invoke(e)
+        Log.e(TAG, "${this@UsbCdcTransfer}-onRunError", e)
     }
 
-    inner class ReadThread : Thread() {
-        override fun run() {
-            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
-            while (isCollecting) {
-                val ret = readWriteBuffer.read()
-                runCatching {
-                    handler.post {
-                        if (ret.isNotEmpty()) {
-                            listener?.onNewData(ret)
-                        }
+    fun isCollecting(): Boolean {
+        return isCollecting
+    }
+
+    private fun notCollecting(): Boolean {
+        return isCollecting.not()
+    }
+
+    suspend fun ensureConnection() = withContext(Dispatchers.IO) {
+        if (config.port.isOpen && usbIoManager.state == SerialInputOutputManager.State.RUNNING) {
+            Result.success(Unit)
+        } else {
+            Log.i(TAG, "${this@UsbCdcTransfer}-open usb device")
+            kotlin.runCatching {
+                config.run {
+                    if (!port.isOpen) {
+                        port.open(connection)
                     }
+                    port.setParameters(baudRate, dataBits, stopBits, parity)
+                    port.dtr = true
+                    usbIoManager.start()
+                    usbIoManager.readBufferSize = USB_TRANSFER_BUFFER_SIZE
                 }
             }
         }
+    }
+
+    fun readFromBuffer(): ByteArray {
+        return readWriteBuffer.read()
     }
 }

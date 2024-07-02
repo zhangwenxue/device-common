@@ -17,7 +17,7 @@ interface Channel {
     suspend fun read(src: ByteArray, timeoutMillis: Int): Result<ByteArray>
     suspend fun write(dest: ByteArray, timeoutMillis: Int): Result<Unit>
     suspend fun listen(): Flow<Result<ByteArray>>
-    suspend fun stopListen():Result<Unit>
+    suspend fun stopListen(): Result<Unit>
 }
 
 interface Connection {
@@ -35,5 +35,5 @@ interface Connection {
 
     suspend fun connect(): Result<Unit>
 
-    fun disconnect()
+    suspend fun disconnect()
 }

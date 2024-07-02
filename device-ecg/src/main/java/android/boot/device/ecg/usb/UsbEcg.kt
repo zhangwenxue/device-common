@@ -4,11 +4,11 @@ import android.boot.device.api.ChannelNotFoundException
 import android.boot.device.api.Connection
 import android.boot.device.api.ECGDevice
 import android.boot.device.api.Gen
-import android.boot.device.api.State
 import android.boot.device.api.Transmission
+import android.boot.device.ecg.util.ECG3GenParser
+import android.boot.device.ecg.util.Ecg3GenCommand
 import android.hardware.usb.UsbDevice
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 
 class UsbEcg(
@@ -18,20 +18,18 @@ class UsbEcg(
     override val transmission: Transmission = Transmission.Usb,
     override val gen: Gen = Gen.Gen3
 ) : ECGDevice {
-    private val _eventFlow: MutableStateFlow<State> = MutableStateFlow(State.Idle)
-    override val eventFlow: Flow<State> = _eventFlow
-    override val connection: Connection = UsbConnection(name, realDevice, _eventFlow)
+
+    override val connection: Connection = UsbConnection(name, realDevice)
 
     override suspend fun read(
-        dest: ByteArray?,
+        dest: ByteArray,
         timeoutMillis: Int,
         autoClose: Boolean
-    ): Result<ByteArray> {
-        val connected = connection.connect()
-        if (connected.isFailure) return Result.failure(Throwable("Device connection failure:${connected.exceptionOrNull()?.message}"))
-        return (connection.channel1()?.read(dest, timeoutMillis) ?: Result.failure(
-            ChannelNotFoundException
-        )).also {
+    ) = runCatching {
+        assertConnection()
+        (connection.channel1()?.read(dest, timeoutMillis)
+            ?.getOrThrow()
+            ?: throw ChannelNotFoundException).also {
             if (autoClose) connection.disconnect()
         }
     }
@@ -40,30 +38,51 @@ class UsbEcg(
         dest: ByteArray,
         timeoutMillis: Int,
         autoClose: Boolean
-    ): Result<Unit> {
-        val connected = connection.connect()
-        if (connected.isFailure) return Result.failure(Throwable("Device connection failure:${connected.exceptionOrNull()?.message}"))
-        return (connection.channel1()?.write(dest, timeoutMillis) ?: Result.failure(
-            ChannelNotFoundException
-        )).also {
+    ) = runCatching {
+        assertConnection()
+        (connection.channel1()?.write(dest, timeoutMillis)
+            ?.getOrThrow()
+            ?: throw ChannelNotFoundException).also {
             if (autoClose) connection.disconnect()
         }
     }
 
     override suspend fun listen(): Flow<Result<ByteArray>> {
-        val connected = connection.connect()
-        if (connected.isFailure) return flowOf(Result.failure(Throwable("Device connection failure:${connected.exceptionOrNull()?.message}")))
-        write(byteArrayOf(0xA5.toByte(), 0x09, 0x00, 0x09, 0x5A), 100, false)
+        val writeRet = write(Ecg3GenCommand.START_BLE_COLLECT_CMD, 100, false)
+        if (writeRet.isFailure) {
+            val error =
+                writeRet.exceptionOrNull() ?: Throwable("Listen failure,write start cmd failure")
+            return flowOf(Result.failure(error))
+        }
         return connection.channel1()?.listen() ?: flowOf()
-
     }
 
-    override suspend fun stopListen(): Result<Unit> {
-        return write(byteArrayOf(0xA5.toByte(), 0x04, 0x00, 0x04, 0x5A), 100, false)
+    override suspend fun stopListen() = runCatching {
+        connection.channel1()?.stopListen()?.getOrThrow() ?: throw ChannelNotFoundException
     }
 
-    override fun close() {
+    override suspend fun readSN(autoClose: Boolean) = runCatching {
+        val readRet = read(ECG3GenParser.packReadSNCmd(), 200, autoClose)
+        ECG3GenParser.parseSN(readRet.getOrThrow()).getOrThrow()
+    }
+
+    override suspend fun writeSN(sn: String, autoClose: Boolean) = runCatching {
+        write(ECG3GenParser.packWriteSNCmd(sn).getOrThrow(), 500, autoClose).getOrThrow()
+    }
+
+
+    override suspend fun readVersion(autoClose: Boolean) = runCatching {
+        val result = read(ECG3GenParser.packReadVersionCmd(), 200, autoClose)
+        ECG3GenParser.parseVersion(result.getOrThrow()).getOrThrow()
+    }
+
+
+    override suspend fun close() {
         connection.disconnect()
     }
 
+    @Throws(Throwable::class)
+    private suspend fun assertConnection() {
+        connection.connect().getOrThrow()
+    }
 }

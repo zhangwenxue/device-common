@@ -145,7 +145,7 @@ class UsbDeviceDiscovery : DeviceDiscovery {
                     }
                     device = pickDevice()
                     DeviceLog.log("<Usb> Usb attached: ${device?.deviceName}")
-                    latch.count
+                    latch.countDown()
                 }
             }
         }

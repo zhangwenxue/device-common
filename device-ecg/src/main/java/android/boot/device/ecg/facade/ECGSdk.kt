@@ -4,7 +4,6 @@ import android.boot.ble.common.permission.BLEPermission
 import android.boot.common.extensions.i
 import android.boot.device.api.DeviceLog
 import android.boot.device.api.ECGDevice
-import android.boot.device.api.State
 import android.boot.device.ecg.nordicble.BleDevice3GenFilter
 import android.boot.device.ecg.nordicble.NordicBleDiscovery
 import android.boot.device.ecg.usb.UsbDeviceDiscovery
@@ -14,22 +13,18 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.File
 
 object ECGSdk {
     private val scope by lazy {
         CoroutineScope(Dispatchers.Default)
     }
-
-    private var _statusFlow: StateFlow<State> = MutableStateFlow(State.Idle)
-    val statusFlow = _statusFlow
 
     private val lock = Mutex()
 
@@ -41,8 +36,20 @@ object ECGSdk {
     @Volatile
     var isListening: Boolean = false
 
-    suspend fun setup(force: Boolean = false, bleScope: BLEPermission? = null): Result<ECGDevice> {
+    suspend fun getDevice(
+        force: Boolean = false,
+        bleScope: BLEPermission? = null
+    ): Result<ECGDevice> {
         bleDeviceDiscovery.bleScope = bleScope
+        withContext(Dispatchers.IO) {
+
+            runCatching {
+                File("/sys/devices/platform/hardware_ports_manager/usb_interfaces_sel").writeText(
+                    "1",
+                    Charsets.UTF_8
+                )
+            }
+        }
         return lock.withLock {
             if (force) {
                 targetDevice?.close()
@@ -149,22 +156,23 @@ object ECGSdk {
         return deviceRet.getOrThrow().writeSN(sn, autoClose)
     }
 
-    fun disconnect() {
-        targetDevice?.run {
-            this.close()
-        }
-        targetDevice = null
-    }
 
     suspend fun stopListen() = lock.withLock {
         withContext(Dispatchers.Default) {
             if (!isListening) return@withContext
+            isListening = false
             targetDevice?.run {
                 stopListen().onFailure { DeviceLog.log("<Agent> Stop listen failed:${it.message}") }
                     .onSuccess { DeviceLog.log("<Agent> Stop listen success") }
-                isListening = false
             }
         }
+    }
+
+    suspend fun disconnect() {
+        targetDevice?.run {
+            this.close()
+        }
+        targetDevice = null
     }
 
     private suspend fun checkDevice(autoDiscover: Boolean = false): Result<ECGDevice> {
@@ -179,7 +187,7 @@ object ECGSdk {
                     }
             } else {
                 DeviceLog.log("<Agent> Setup ECG device automatically...")
-                setup()
+                getDevice()
             }
         }
     }

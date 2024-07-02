@@ -8,14 +8,13 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Button
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -70,83 +69,91 @@ fun Demo(modifier: Modifier = Modifier, bleScope: BLEPermission) {
 
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    val state = ECGSdk.statusFlow.collectAsState()
-    Column(modifier = modifier) {
-        Text(text = ecgDevice)
-        Text(text = "State:${state.value}")
-        Text(text = "SN:$sn")
-        Text(text = "WriteSN:$writeSN")
-        Text(text = "Version:$version")
-        Button(onClick = {
-            ecgDevice = "--"
-            scope.launch {
-                ECGSdk.setup(true, bleScope).onSuccess {
-                    ecgDevice = it.name
+    LazyColumn(modifier = modifier) {
+        item { Text(text = ecgDevice) }
+        item { Text(text = "SN:$sn") }
+        item { Text(text = "WriteSN:$writeSN") }
+        item { Text(text = "Version:$version") }
+        item {
+            Button(onClick = {
+                ecgDevice = "--"
+                scope.launch {
+                    ECGSdk.getDevice(true, bleScope).onSuccess {
+                        ecgDevice = it.name
 
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(
-                            context,
-                            "Device found:${it.name}", Toast.LENGTH_LONG
-                        ).show()
-                    }
-                }.onFailure {
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(
-                            context,
-                            "No device found:${it.message}", Toast.LENGTH_LONG
-                        ).show()
-                    }
-                }
-            }
-        }) {
-            Text(text = "Discover")
-        }
-        Button(onClick = {
-            scope.launch {
-                if (ECGSdk.isListening) {
-                    ECGSdk.stopListen()
-                    return@launch
-                }
-                ECGSdk.listen().collect {
-                    it.onSuccess { data ->
-                        dataCollection = data.joinToString { i -> "%02x".format(i) }
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(
+                                context,
+                                "Device found:${it.name}", Toast.LENGTH_LONG
+                            ).show()
+                        }
                     }.onFailure {
-                        dataCollection = it.message ?: ""
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(
+                                context,
+                                "No device found:${it.message}", Toast.LENGTH_LONG
+                            ).show()
+                        }
                     }
                 }
+            }) {
+                Text(text = "Discover")
             }
-        }) {
-            Text(text = "collect")
+        }
+        item {
+            Button(onClick = {
+                scope.launch {
+                    if (ECGSdk.isListening) {
+                        ECGSdk.stopListen()
+                        return@launch
+                    }
+                    ECGSdk.listen().collect {
+                        it.onSuccess { data ->
+                            dataCollection = data.joinToString { i -> "%02x".format(i) }
+                        }.onFailure {
+                            dataCollection = it.message ?: ""
+                        }
+                    }
+                }
+            }) {
+                Text(text = "collect")
+            }
         }
 
-        Button(onClick = {
-            scope.launch {
-                ECGSdk.readSN().onSuccess { sn = it }.onFailure { sn = it.message ?: "error" }
+        item {
+            Button(onClick = {
+                scope.launch {
+                    ECGSdk.readSN().onSuccess { sn = it }.onFailure { sn = it.message ?: "error" }
+                }
+            }) {
+                Text(text = "read sn")
             }
-        }) {
-            Text(text = "read sn")
         }
 
-        Button(onClick = {
-            scope.launch {
-                ECGSdk.readVersion().onSuccess { version = it }
-                    .onFailure { version = it.message ?: "error" }
+        item {
+            Button(onClick = {
+                scope.launch {
+                    ECGSdk.readVersion().onSuccess { version = it }
+                        .onFailure { version = it.message ?: "error" }
+                }
+            }) {
+                Text(text = "read version")
             }
-        }) {
-            Text(text = "read version")
         }
 
-        Button(onClick = {
-            scope.launch {
-                ECGSdk.writeSn(/*"2024-${(0..10).random()}"*/"C1220230304000000")
-                    .onSuccess { writeSN = "Write success" }
-                    .onFailure { writeSN = it.message ?: "error" }
+        item {
+            Button(onClick = {
+                scope.launch {
+                    ECGSdk.writeSn(/*"2024-${(0..10).random()}"*/"C122023${(1000..9999).random()}000000")
+                        .onSuccess { writeSN = "Write success" }
+                        .onFailure { writeSN = it.message ?: "error" }
+                }
+            }) {
+                Text(text = "write sn")
             }
-        }) {
-            Text(text = "write sn")
         }
 
-        Text(text = dataCollection)
+        item { Text(text = dataCollection) }
     }
 }
 
