@@ -4,6 +4,7 @@ import android.boot.common.extensions.asHexString
 import android.boot.common.extensions.i
 import android.boot.device.api.DeviceLog
 import android.hardware.usb.UsbDeviceConnection
+import android.os.SystemClock
 import android.util.Log
 import com.hoho.android.usbserial.driver.CommonUsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialPort
@@ -11,8 +12,8 @@ import com.hoho.android.usbserial.driver.UsbSerialPort.PARITY_NONE
 import com.hoho.android.usbserial.util.SerialInputOutputManager
 import com.hoho.android.usbserial.util.SerialInputOutputManager.Listener
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.locks.ReentrantLock
@@ -63,31 +64,6 @@ class ReadWriteBuffer(private val bufferSize: Int) {
     }
 }
 
-data class WriteRequest(
-    val response: ByteArray?,
-    val latch: CountDownLatch?,
-    val filter: (ByteArray) -> Boolean
-) {
-    override fun equals(other: Any?): Boolean {
-        if (this === other) return true
-        if (javaClass != other?.javaClass) return false
-
-        other as WriteRequest
-
-        if (!response.contentEquals(other.response)) return false
-        if (filter != other.filter) return false
-
-        return true
-    }
-
-    override fun hashCode(): Int {
-        var result = response?.contentHashCode() ?: 0
-        result = 31 * result + (latch?.hashCode() ?: 0)
-        result = 31 * result + filter.hashCode()
-        return result
-    }
-}
-
 class UsbCdcTransfer(private val config: UsbConfig) : Listener {
     companion object {
         private const val READ_WAIT_MILLIS = 0L
@@ -99,8 +75,6 @@ class UsbCdcTransfer(private val config: UsbConfig) : Listener {
     }
 
     var runErrorAction: ((Throwable?) -> Unit)? = null
-
-    private var writeInfo = WriteRequest(byteArrayOf(), CountDownLatch(1)) { false }
 
     private var writeLock = ReentrantLock()
 
@@ -123,16 +97,24 @@ class UsbCdcTransfer(private val config: UsbConfig) : Listener {
     private val readWriteBuffer = ReadWriteBuffer(CACHE_BUFFER_SIZE)
 
 
-    suspend fun startEcgCollect(command: ByteArray): Result<Unit> {
+    fun startEcgCollect(): Result<Unit> {
         return runCatching {
             Log.i(TAG, "${this@UsbCdcTransfer}-start ecg collect")
             if (isCollecting()) return@runCatching
-            withContext(Dispatchers.IO) {
-                write(command, 200)
-                isCollecting = true
-            }
+            usbIoManager.start()
+            isCollecting = true
         }
     }
+
+    suspend fun stop(command: ByteArray) {
+        if (notCollecting()) {
+            return
+        }
+        isCollecting = false
+        write(command, 2000)
+        usbIoManager.stop()
+    }
+
 
     suspend fun write(command: ByteArray, timeoutMills: Int): Result<Unit> {
         if (isCollecting()) return Result.failure(Throwable("Usb write not support while collecting data"))
@@ -140,11 +122,6 @@ class UsbCdcTransfer(private val config: UsbConfig) : Listener {
             withContext(Dispatchers.IO) {
                 writeLock.tryLock(timeoutMills.toLong(), TimeUnit.MILLISECONDS)
                 try {
-                    writeInfo =
-                        writeInfo.copy(
-                            response = null,
-                            latch = null,
-                            filter = { true })
                     config.port.write(command, timeoutMills)
                 } finally {
                     writeLock.unlock()
@@ -160,39 +137,28 @@ class UsbCdcTransfer(private val config: UsbConfig) : Listener {
             withContext(Dispatchers.IO) {
                 writeLock.tryLock(timeoutMills.toLong(), TimeUnit.MILLISECONDS)
                 try {
-                    writeInfo =
-                        writeInfo.copy(
-                            response = null,
-                            latch = CountDownLatch(1),
-                            filter = { it.size > 2 && it[0] == command[0] && it[1] == command[1] })
+                    DeviceLog.log("Reading CMD ${command.asHexString()}")
                     config.port.write(command, timeoutMills)
-                    writeInfo.latch?.await(timeoutMills.toLong(), TimeUnit.MILLISECONDS)
-                    writeInfo.response ?: throw TimeoutException("Read timeout")
+                    var finished = false
+                    val start = SystemClock.elapsedRealtime()
+                    var response: ByteArray? = null
+                    while (!finished && SystemClock.elapsedRealtime() - start < 2000) {
+                        delay(10)
+                        val buffer = ByteArray(64)
+                        val len = config.port.read(buffer, 500)
+                        DeviceLog.log("Reading $len ${buffer.asHexString()}")
+                        if (len > 2 && buffer[0] == command[0] && buffer[1] == command[1]) {
+                            response = ByteArray(len)
+                            System.arraycopy(buffer, 0, response, 0, len)
+                            finished = true
+                        }
+                    }
+                    response ?: throw TimeoutException("Read timeout")
+                } catch (e: Exception) {
+                    DeviceLog.log("Reading Exception", throwable = e)
+                    throw e
                 } finally {
                     writeLock.unlock()
-                }
-            }
-        }
-    }
-
-    suspend fun stop(command: ByteArray) {
-        if (notCollecting()) {
-            return
-        }
-
-        runCatching {
-            withContext(Dispatchers.IO) {
-                writeLock.tryLock(5000L, TimeUnit.MILLISECONDS)
-                try {
-                    writeInfo =
-                        writeInfo.copy(
-                            response = null,
-                            latch = null,
-                            filter = { true })
-                    config.port.write(command, 50)
-                } finally {
-                    writeLock.unlock()
-                    isCollecting = false
                 }
             }
         }
@@ -210,10 +176,14 @@ class UsbCdcTransfer(private val config: UsbConfig) : Listener {
         if (data == null || data.isEmpty()) return
         DeviceLog.i("Usb-Collecting", data.asHexString())
         readWriteBuffer.write(data)
-        if (writeInfo.filter(data)) {
-            writeInfo.latch?.count
-            writeInfo = writeInfo.copy(response = data)
-        }
+//
+//        if (writeInfo.filter?.let { it(data) } == true) {
+//            "$writeInfo wait hit :${data.asHexString()}".toast()
+//            writeInfo = writeInfo.copy(response = data)
+//            writeInfo.latch?.countDown()
+//        } else {
+//            "$writeInfo wait missed:${data.asHexString()}".toast()
+//        }
     }
 
     override fun onRunError(e: Exception?) {
@@ -241,7 +211,6 @@ class UsbCdcTransfer(private val config: UsbConfig) : Listener {
                     }
                     port.setParameters(baudRate, dataBits, stopBits, parity)
                     port.dtr = true
-                    usbIoManager.start()
                     usbIoManager.readBufferSize = USB_TRANSFER_BUFFER_SIZE
                 }
             }

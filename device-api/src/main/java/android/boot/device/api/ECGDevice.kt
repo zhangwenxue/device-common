@@ -17,6 +17,7 @@ interface ECGDevice {
     val connection: Connection
     val transmission: Transmission
     val gen: Gen
+    val ecgCommands: ECGCommands
     suspend fun read(
         dest: ByteArray,
         timeoutMillis: Int,

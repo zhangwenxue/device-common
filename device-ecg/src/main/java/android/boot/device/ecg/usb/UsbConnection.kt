@@ -4,10 +4,7 @@ import android.boot.common.provider.globalContext
 import android.boot.device.api.Channel
 import android.boot.device.api.Connection
 import android.boot.device.api.DeviceLog
-import android.boot.device.ecg.util.ECG3GenParser
-import android.boot.device.ecg.util.Ecg3GenCommand.START_BLE_COLLECT_CMD
-import android.boot.device.ecg.util.Ecg3GenCommand.START_USB_COLLECT_CMD
-import android.boot.device.ecg.util.Ecg3GenCommand.STOP_COLLECT_CMD
+import android.boot.device.api.ECGCommands
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import com.hoho.android.usbserial.driver.UsbSerialProber
@@ -26,6 +23,7 @@ class UsbCdcChannel(
     override val id: String,
     override val name: String?,
     private val usbDevice: UsbDevice,
+    private val ecgCommands: ECGCommands,
 ) : Channel {
     companion object {
         val UNCONNECTED_ERROR = Throwable("Usb connection unestablished!")
@@ -71,7 +69,7 @@ class UsbCdcChannel(
 
     override suspend fun listen(): Flow<Result<ByteArray>> {
         val startRet = cdcTransfer
-            ?.startEcgCollect(START_USB_COLLECT_CMD)
+            ?.startEcgCollect()
             ?: Result.failure(UNCONNECTED_ERROR)
 
         if (startRet.isFailure) {
@@ -101,9 +99,10 @@ class UsbCdcChannel(
 
     override suspend fun stopListen(): Result<Unit> {
         return withContext(Dispatchers.IO) {
-            cdcTransfer?.stop(STOP_COLLECT_CMD) ?: Result.success("No Need to stop listen").also {
-                DeviceLog.log("_usb_transfer", "No need to stop listen")
-            }
+            cdcTransfer?.stop(ecgCommands.stopCollect) ?: Result.success("No Need to stop listen")
+                .also {
+                    DeviceLog.log("_usb_transfer", "No need to stop listen")
+                }
             Result.success(Unit)
         }
     }
@@ -111,7 +110,7 @@ class UsbCdcChannel(
     suspend fun disconnect() {
         withContext(Dispatchers.IO) {
             mutex.withLock {
-                cdcTransfer?.stop(ECG3GenParser.packStopCollectCmd())
+                cdcTransfer?.stop(ecgCommands.stopCollect)
                 cdcTransfer?.close()
                 cdcTransfer = null
             }
@@ -122,9 +121,10 @@ class UsbCdcChannel(
 class UsbConnection(
     override val name: String,
     override val realDevice: UsbDevice,
+    private val commands: ECGCommands
 ) :
     Connection {
-    private val channel1 = UsbCdcChannel("0", "channel1", realDevice)
+    private val channel1 = UsbCdcChannel("0", "channel1", realDevice, commands)
     override fun channel1() = channel1
 
     override suspend fun connect(): Result<Unit> {

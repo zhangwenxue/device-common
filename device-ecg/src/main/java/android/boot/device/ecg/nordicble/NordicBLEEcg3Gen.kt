@@ -4,10 +4,10 @@ import android.boot.common.extensions.asHexString
 import android.boot.device.api.Channel
 import android.boot.device.api.ChannelNotFoundException
 import android.boot.device.api.DeviceLog
+import android.boot.device.api.ECGCommands
 import android.boot.device.api.ECGDevice
 import android.boot.device.api.Gen
 import android.boot.device.api.Transmission
-import android.boot.device.ecg.util.ECG3GenParser
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import no.nordicsemi.android.kotlin.ble.client.main.callback.ClientBleGatt
@@ -18,6 +18,7 @@ import no.nordicsemi.android.kotlin.ble.core.ServerDevice
 class NordicBle3GConnection(
     name: String,
     realDevice: ServerDevice,
+    private val ecgCommands: ECGCommands,
 ) : NordicBleConnection(name, realDevice) {
     private var channel1: Channel? = null
     private var channel2: Channel? = null
@@ -29,6 +30,7 @@ class NordicBle3GConnection(
             services,
             "0000fe40-cc7a-482a-984a-7f2ed5b3e58f",
             "0000fe41-8e22-4541-9d4c-21edae82ed19",
+            ecgCommands
         )
 
         channel2 = NordicCharacteristicChannel(
@@ -36,6 +38,7 @@ class NordicBle3GConnection(
             services,
             "0000fe40-cc7a-482a-984a-7f2ed5b3e58f",
             "0000fe42-8e22-4541-9d4c-21edae82ed19",
+            ecgCommands
         )
     }
 
@@ -50,8 +53,9 @@ class NordicBleEcg3G(
     override val name: String = "三代机Ble",
     override val transmission: Transmission = Transmission.Ble,
     override val gen: Gen = Gen.Gen3,
+    override val ecgCommands: ECGCommands = BLE3GenCommands()
 ) : ECGDevice {
-    private val realConnection = NordicBle3GConnection("Ble3GConnection", realDevice)
+    private val realConnection = NordicBle3GConnection("Ble3GConnection", realDevice, ecgCommands)
     override val connection = realConnection
 
     override suspend fun read(
@@ -83,7 +87,7 @@ class NordicBleEcg3G(
     }
 
     override suspend fun listen(): Flow<Result<ByteArray>> {
-        val ret = write(ECG3GenParser.packStartCollectCmd(), 500, false)
+        val ret = write(ecgCommands.startCollect, 500, false)
         if (ret.isFailure) {
             val error = ret.exceptionOrNull() ?: Throwable("Write start collect cmd error")
             return flowOf(Result.failure(error))
@@ -98,21 +102,21 @@ class NordicBleEcg3G(
     }
 
     override suspend fun readSN(autoClose: Boolean) = runCatching {
-        val ret = read(ECG3GenParser.packReadSNCmd(), 500, false).getOrThrow()
-        ECG3GenParser.parseSN(ret).getOrThrow()
+        val ret = read(ecgCommands.readSN, 500, false).getOrThrow()
+        ecgCommands.snParser(ret).getOrThrow()
     }
 
     override suspend fun writeSN(sn: String, autoClose: Boolean) =
         runCatching {
-            val writeSNCmd = ECG3GenParser.packWriteSNCmd(sn).getOrThrow()
+            val writeSNCmd = ecgCommands.snPackager(sn).getOrThrow()
             DeviceLog.log("WriteSN:$sn\n${writeSNCmd.asHexString()}")
             write(writeSNCmd, 200, false).getOrThrow()
         }
 
 
     override suspend fun readVersion(autoClose: Boolean) = runCatching {
-        val result = read(ECG3GenParser.packReadVersionCmd(), 200, autoClose)
-        ECG3GenParser.parseVersion(result.getOrThrow()).getOrThrow()
+        val result = read(ecgCommands.readVersion, 200, autoClose)
+        ecgCommands.versionParser(result.getOrThrow()).getOrThrow()
     }
 
     override suspend fun close() {

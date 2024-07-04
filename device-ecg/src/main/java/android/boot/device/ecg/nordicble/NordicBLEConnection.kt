@@ -8,7 +8,7 @@ import android.boot.device.api.Channel
 import android.boot.device.api.ChannelNotFoundException
 import android.boot.device.api.Connection
 import android.boot.device.api.DeviceLog
-import android.boot.device.ecg.util.ECG3GenParser
+import android.boot.device.api.ECGCommands
 import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
@@ -78,6 +78,7 @@ class NordicCharacteristicChannel(
     private val services: ClientBleGattServices,
     private val serviceUUid: String,
     private val characterUUid: String,
+    private val ecgCommands: ECGCommands
 ) : Channel {
     private var characteristic: ClientBleGattCharacteristic? = null
 
@@ -109,14 +110,6 @@ class NordicCharacteristicChannel(
 
     override suspend fun listen(): Flow<Result<ByteArray>> {
         assertBluetoothConnectPermission()
-        val writeRet = write(ECG3GenParser.packStartCollectCmd(), 500)
-        if (writeRet.isFailure) {
-            return flowOf(
-                Result.failure(
-                    writeRet.exceptionOrNull() ?: Throwable("Write error")
-                )
-            )
-        }
         return getCharacteristic()?.getNotifications(bufferOverflow = BufferOverflow.SUSPEND)
             ?.filterIsInstance(DataByteArray::class)
             ?.filterNotNull()
@@ -127,7 +120,7 @@ class NordicCharacteristicChannel(
 
     override suspend fun stopListen(): Result<Unit> {
         assertBluetoothConnectPermission()
-        return write(ECG3GenParser.packStopCollectCmd(), 500)
+        return write(ecgCommands.stopCollect, 500)
             .onSuccess {
                 DeviceLog.log("<BLE> Stop listen success")
             }.onFailure {

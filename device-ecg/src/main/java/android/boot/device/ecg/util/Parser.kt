@@ -2,10 +2,6 @@ package android.boot.device.ecg.util
 
 import android.boot.common.extensions.asHexString
 import android.boot.device.api.DeviceLog
-import android.boot.device.ecg.util.Ecg3GenCommand.READ_SN_CMD
-import android.boot.device.ecg.util.Ecg3GenCommand.READ_VERSION_CMD
-import android.boot.device.ecg.util.Ecg3GenCommand.START_BLE_COLLECT_CMD
-import android.boot.device.ecg.util.Ecg3GenCommand.STOP_COLLECT_CMD
 import kotlin.experimental.xor
 
 object ECG3GenParser {
@@ -23,17 +19,10 @@ object ECG3GenParser {
         return Result.success(ret)
     }
 
-    fun packStartCollectCmd() = START_BLE_COLLECT_CMD
-
-    fun packStopCollectCmd() = STOP_COLLECT_CMD
-
-    fun packReadSNCmd() = READ_SN_CMD
-
-    fun packReadVersionCmd() = READ_VERSION_CMD
 
     fun parseSN(data: ByteArray): Result<String> {
         if (data.size < 5) return Result.failure(Throwable("Invalid data size:${data.size}"))
-        return if (data[0] == (0xA5).toByte() && data[1] == READ_SN_CMD[1]) {
+        return if (data[0] == (0xA5).toByte() && data[1] == (0x06).toByte()) {
             val length = data[2].toInt()
             val snArray = ByteArray(length + 5)
             System.arraycopy(data, 0, snArray, 0, length + 5)
@@ -80,7 +69,7 @@ object ECG3GenParser {
     }
 
     fun parseVersion(data: ByteArray): Result<String> {
-        return if (data[0] == (0xA5).toByte() && data[1] == READ_VERSION_CMD[1]) {
+        return if (data[0] == (0xA5).toByte() && data[1] == (0x05).toByte()) {
             val length = data[2].toInt()
             val snArray = ByteArray(length)
             System.arraycopy(data, 3, snArray, 0, length)

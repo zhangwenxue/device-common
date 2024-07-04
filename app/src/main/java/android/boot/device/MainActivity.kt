@@ -8,23 +8,32 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Button
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.experimental.and
 
 
 class MainActivity : ComponentActivity() {
@@ -69,6 +78,16 @@ fun Demo(modifier: Modifier = Modifier, bleScope: BLEPermission) {
 
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    var number by remember {
+        mutableIntStateOf(-1)
+    }
+    var errorCount by remember {
+        mutableIntStateOf(-1)
+    }
+
+    var data by remember {
+        mutableStateOf((listOf<String>()))
+    }
     LazyColumn(modifier = modifier) {
         item { Text(text = ecgDevice) }
         item { Text(text = "SN:$sn") }
@@ -100,6 +119,7 @@ fun Demo(modifier: Modifier = Modifier, bleScope: BLEPermission) {
                 Text(text = "Discover")
             }
         }
+
         item {
             Button(onClick = {
                 scope.launch {
@@ -107,9 +127,27 @@ fun Demo(modifier: Modifier = Modifier, bleScope: BLEPermission) {
                         ECGSdk.stopListen()
                         return@launch
                     }
-                    ECGSdk.listen().collect {
-                        it.onSuccess { data ->
-                            dataCollection = data.joinToString { i -> "%02x".format(i) }
+                    data = emptyList()
+                    number = -1
+                    errorCount = 0
+                    ECGSdk.listen().onEach {
+                        it.onSuccess { array ->
+                            val list = array.toList().chunked(31)
+                            list.forEach { b ->
+                                val no = (b[4] and 0xFF.toByte()).toInt()
+                                if (number != -1 && ((number + 1).mod(64)) != no.mod(64)) {
+                                    errorCount = errorCount++
+                                }
+                                number = no
+                            }
+
+                        }
+                    }.flowOn(Dispatchers.Default).collect {
+                        it.onSuccess { d ->
+                            data = data.toMutableList().apply {
+                                add(d.joinToString { i -> "%02x".format(i) })
+                                toList()
+                            }
                         }.onFailure {
                             dataCollection = it.message ?: ""
                         }
@@ -153,7 +191,19 @@ fun Demo(modifier: Modifier = Modifier, bleScope: BLEPermission) {
             }
         }
 
+        item { Text(text = "error count:$number") }
         item { Text(text = dataCollection) }
+        itemsIndexed(data) { a, b ->
+            val color = if (a.mod(2) == 0) Color.Gray else Color.White
+            Text(
+                text = b,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(color)
+                    .padding(vertical = 2.dp),
+                color = Color.Black
+            )
+        }
     }
 }
 

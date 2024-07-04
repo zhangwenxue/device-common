@@ -41,78 +41,79 @@ object ECGSdk {
         bleScope: BLEPermission? = null
     ): Result<ECGDevice> {
         bleDeviceDiscovery.bleScope = bleScope
-        withContext(Dispatchers.IO) {
-
+        return withContext(Dispatchers.IO) {
             runCatching {
                 File("/sys/devices/platform/hardware_ports_manager/usb_interfaces_sel").writeText(
                     "1",
                     Charsets.UTF_8
                 )
             }
-        }
-        return lock.withLock {
-            if (force) {
-                targetDevice?.close()
-                targetDevice = null
-            }
-            val cache = targetDevice
-            if (cache != null) {
-                DeviceLog.log("<Agent> Discover cached device:$cache")
-                Result.success(cache)
-            } else {
-                val usbEcgFlow =
-                    usbDeviceDiscovery.discover(scope, 2000L, UsbDeviceFilter())
-                val bleEcgFlow = bleDeviceDiscovery.discover(scope, 5000L, BleDevice3GenFilter())
-                var usbDiscovered = false
-                var bleResult: Result<ECGDevice>? = null
-                coroutineScope {
-                    val result = CompletableDeferred<Result<ECGDevice>>()
-                    val bleDiscoveryJob = launch {
-                        val ecgDeviceRet = bleEcgFlow.firstOrNull()
-                        DeviceLog.log(
-                            "<Agent> ble device collected:${
-                                ecgDeviceRet?.getOrNull()?.firstOrNull()?.name
-                            },result.isCompleted:${result.isCompleted}"
-                        )
-                        val ret = ecgDeviceRet?.let {
-                            if (it.isFailure) Result.failure(
-                                it.exceptionOrNull() ?: Throwable("No Ble ecg found!")
-                            ) else {
-                                it.getOrNull()?.firstOrNull()?.let { device ->
-                                    Result.success(device)
-                                } ?: Result.failure(Throwable("No ble ecg found!"))
-                            }
-                        } ?: Result.failure(Throwable("No ble ecg found!"))
-                        if (usbDiscovered) {
-                            if (!result.isCompleted) {
-                                result.complete(ret)
-                            }
-                        } else {
-                            bleResult = ret
-                        }
 
-                    }
-
-                    launch {
-                        usbEcgFlow.collect {
-                            val device = it.getOrNull()?.firstOrNull()
-                            DeviceLog.log("<Agent> usb device collected:${device?.name}")
-                            usbDiscovered = true
-                            if (it.isSuccess && device != null) {
-                                result.complete(Result.success(device))
-                                DeviceLog.i("<Agent> complete discover job")
-                                bleDiscoveryJob.cancel()
+            lock.withLock {
+                if (force) {
+                    targetDevice?.close()
+                    targetDevice = null
+                }
+                val cache = targetDevice
+                if (cache != null) {
+                    DeviceLog.log("<Agent> Discover cached device:$cache")
+                    Result.success(cache)
+                } else {
+                    val usbEcgFlow =
+                        usbDeviceDiscovery.discover(scope, 2000L, UsbDeviceFilter())
+                    val bleEcgFlow =
+                        bleDeviceDiscovery.discover(scope, 5000L, BleDevice3GenFilter())
+                    var usbDiscovered = false
+                    var bleResult: Result<ECGDevice>? = null
+                    coroutineScope {
+                        val result = CompletableDeferred<Result<ECGDevice>>()
+                        val bleDiscoveryJob = launch {
+                            val ecgDeviceRet = bleEcgFlow.firstOrNull()
+                            DeviceLog.log(
+                                "<Agent> ble device collected:${
+                                    ecgDeviceRet?.getOrNull()?.firstOrNull()?.name
+                                },result.isCompleted:${result.isCompleted}"
+                            )
+                            val ret = ecgDeviceRet?.let {
+                                if (it.isFailure) Result.failure(
+                                    it.exceptionOrNull() ?: Throwable("No Ble ecg found!")
+                                ) else {
+                                    it.getOrNull()?.firstOrNull()?.let { device ->
+                                        Result.success(device)
+                                    } ?: Result.failure(Throwable("No ble ecg found!"))
+                                }
+                            } ?: Result.failure(Throwable("No ble ecg found!"))
+                            if (usbDiscovered) {
+                                if (!result.isCompleted) {
+                                    result.complete(ret)
+                                }
                             } else {
-                                bleResult?.let { ret -> result.complete(ret) }
+                                bleResult = ret
+                            }
+
+                        }
+
+                        launch {
+                            usbEcgFlow.collect {
+                                val device = it.getOrNull()?.firstOrNull()
+                                DeviceLog.log("<Agent> usb device collected:${device?.name}")
+                                usbDiscovered = true
+                                if (it.isSuccess && device != null) {
+                                    result.complete(Result.success(device))
+                                    DeviceLog.i("<Agent> complete discover job")
+                                    bleDiscoveryJob.cancel()
+                                } else {
+                                    bleResult?.let { ret -> result.complete(ret) }
+                                }
                             }
                         }
-                    }
-                    result.await().also {
-                        it.onSuccess { device ->
-                            targetDevice = device
-                            DeviceLog.log("<Agent> ECG(${device.name}) is good to go!")
-                        }.onFailure {
-                            DeviceLog.log("<Agent> NO DEVICE FOUND!")
+                        result.await().also {
+                            it.onSuccess { device ->
+                                targetDevice = device
+                                DeviceLog.log("<Agent> ECG(${device.name}) is good to go!")
+                            }.onFailure {
+                                DeviceLog.log("<Agent> NO DEVICE FOUND!")
+                            }
                         }
                     }
                 }
