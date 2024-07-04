@@ -13,10 +13,10 @@ import com.hoho.android.usbserial.util.SerialInputOutputManager
 import com.hoho.android.usbserial.util.SerialInputOutputManager.Listener
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
-import java.util.concurrent.locks.ReentrantLock
 import java.util.concurrent.locks.ReentrantReadWriteLock
 
 data class UsbConfig(
@@ -76,7 +76,7 @@ class UsbCdcTransfer(private val config: UsbConfig) : Listener {
 
     var runErrorAction: ((Throwable?) -> Unit)? = null
 
-    private var writeLock = ReentrantLock()
+    private val writeLock = Mutex()
 
     @Volatile
     private var isCollecting = false
@@ -120,11 +120,8 @@ class UsbCdcTransfer(private val config: UsbConfig) : Listener {
         if (isCollecting()) return Result.failure(Throwable("Usb write not support while collecting data"))
         return runCatching {
             withContext(Dispatchers.IO) {
-                writeLock.tryLock(timeoutMills.toLong(), TimeUnit.MILLISECONDS)
-                try {
+                writeLock.withLock {
                     config.port.write(command, timeoutMills)
-                } finally {
-                    writeLock.unlock()
                 }
             }
         }
@@ -135,8 +132,7 @@ class UsbCdcTransfer(private val config: UsbConfig) : Listener {
         if (isCollecting()) return Result.failure(Throwable("Usb read not support while collecting data"))
         return runCatching {
             withContext(Dispatchers.IO) {
-                writeLock.tryLock(timeoutMills.toLong(), TimeUnit.MILLISECONDS)
-                try {
+                writeLock.withLock {
                     DeviceLog.log("Reading CMD ${command.asHexString()}")
                     config.port.write(command, timeoutMills)
                     var finished = false
@@ -154,11 +150,6 @@ class UsbCdcTransfer(private val config: UsbConfig) : Listener {
                         }
                     }
                     response ?: throw TimeoutException("Read timeout")
-                } catch (e: Exception) {
-                    DeviceLog.log("Reading Exception", throwable = e)
-                    throw e
-                } finally {
-                    writeLock.unlock()
                 }
             }
         }
