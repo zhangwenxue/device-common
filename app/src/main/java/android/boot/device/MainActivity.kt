@@ -161,7 +161,8 @@ fun Demo(modifier: Modifier = Modifier, bleScope: BLEPermission) {
         item {
             Button(onClick = {
                 scope.launch {
-                    ECGSdk.readSN().onSuccess { sn = it }.onFailure { sn = it.message ?: "error" }
+                   val ret =  ECGSdk.readSN()
+
                 }
             }) {
                 Text(text = "read sn")
